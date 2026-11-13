@@ -353,7 +353,8 @@ void procDecleration(){
         error(14);
     }
 
-    addSymbol(3, nameIdx, 0, 0);
+    //Adds symbol with the addres of the procedure start
+    addSymbol(3, nameIdx, 0, 200 + 3 * cCount);
 
     //Consumes identifier
     consumeToken("proc-decl");
@@ -364,7 +365,6 @@ void procDecleration(){
 
     //Consume ;
     consumeToken("proc-decl");
-
     //Enter procedures lexical level
     level++;
     //proc Decleration calls block
@@ -372,7 +372,6 @@ void procDecleration(){
 
     //Leaves procedures lexical level
     level--;
-
     //Checks for lack of ;
     if(currentToken >= tCount || tokenTable[currentToken].tCode != 16){
         error(12);
@@ -608,6 +607,7 @@ void statement(){
     expression();
     }
 
+    //Looks for call keyword
     else if(tokenTable[currentToken].tCode == 30){
         //consumes call keyword
         consumeToken("statement");
@@ -634,6 +634,8 @@ void statement(){
             currentToken--;
             error(13);
         }
+
+        emit(5, level - symbolTable[symbolIdx].level, symbolTable[symbolIdx].address);
     }
 
 }
@@ -674,16 +676,29 @@ void factor(){
 
         //Traces lookup for symbol
         traceLookup(symbolIdx);
-
+        if(symbolTable[symbolIdx].type == 1){
+            emit(1, 0, symbolTable[symbolIdx].value);
+        }
+        else if(symbolTable[symbolIdx].type == 2){
+            emit(3, level - symbolTable[symbolIdx].level, symbolTable[symbolIdx].address);
+        }
+        else{
+            //Procedures cannot be called as factors
+            currentToken--;
+            error(11);
+        }
+        
     }
 
     //Checks for numbers
     else if(tokenType == 2){
-        //Consumes number
+        //Emits LIT with number value
+        emit(1, 0, tokenTable[currentToken].val);
+        //Consumes number token
         consumeToken("factor");
     }
 
-    //Handles "("
+    //Checks for expressions with "("
     else if(tokenType == 13){
         consumeToken("factor");
 
@@ -707,21 +722,35 @@ void factor(){
 }
 
 void expression(){
-
+    int negFlag = 0;
     //Checks for optional beggining sign symbol
     if(currentToken < tCount && (tokenTable[currentToken].tCode == 3 || tokenTable[currentToken].tCode == 4)){
+        //If its negative we have to negate after parsing term
+        if(tokenTable[currentToken].tCode == 4){
+            negFlag = 1;
+        }
         //Consumes sign symbol
         consumeToken("expression");
     }
     //Parses first term
     term();
-
+    //Negates term if negative
+    if(negFlag == 1){
+        emit(1, 0, -1);
+        emit(2, 0, 3);
+    }
     //Checks for "+" or "-"
     while(currentToken < tCount  && (tokenTable[currentToken].tCode == 3 || tokenTable[currentToken].tCode == 4)){
+        int m;
+        if(tokenTable[currentToken].tCode == 3)
+            m = 1;
+        else
+            m = 2;
         //Consumes "+" or "-"
         consumeToken("expression");
         //Parses next term
         term();
+        emit(2, 0, m);
     }
 
     //Since expression calls turn the recursive call for term will finish first given multiplication and division precedence
@@ -733,10 +762,18 @@ void term(){
     factor();
     //Checks for "*" or "/"
     while(currentToken < tCount && (tokenTable[currentToken].tCode == 5 || tokenTable[currentToken].tCode == 6)){
+        int m;
+        if(tokenTable[currentToken].tCode == 5)
+            m = 3;
+        else
+            m = 4;
+        
         //Consumes "*" or "/"
         consumeToken("term");
         //Parses factor
         factor();
+        //Emits the opperation after factor is put on stack
+        emit(2, 0, m);
     }
 }
 
