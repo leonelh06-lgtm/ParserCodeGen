@@ -477,9 +477,6 @@ void statement(){
             error(15);
         }
 
-        //Generates output for assignmnet statements lookup
-        traceLookup(symbolIdx);
-
         if(symbolTable[symbolIdx].type != 2){
             //Error 16: can't assign to number
             currentToken--;
@@ -496,6 +493,9 @@ void statement(){
         consumeToken("statement");
 
         expression();
+
+        //Emits assignment code
+        emit(4, level - symbolTable[symbolIdx].level, symbolTable[symbolIdx].address);
     }
 
     //Looks for begin statements
@@ -587,15 +587,18 @@ void statement(){
             error(15);
         }
 
-        //Generates lookup trace output
-        traceLookup(symbolIdx);
-
         //Makes sure identifier is a variable
         if (symbolTable[symbolIdx].type != 2){
             //Error 16: Can only read variables
             currentToken--;
             error(16);
         }
+
+        //Reads top of stack
+        emit(9, 0, 2);
+        //Stores it at variable address
+        emit(4, level - symbolTable[symbolIdx].level, symbolTable[symbolIdx].address);
+        
     }
 
     //Looks for write
@@ -605,6 +608,8 @@ void statement(){
 
     //Parses expression that is written
     expression();
+    //Emits write code
+    emit(9, 0, 1);
     }
 
     //Looks for call keyword
@@ -782,9 +787,13 @@ void condition(){
     expression();
     //Checks for comparison opperators
     if(currentToken < tCount && (tokenTable[currentToken].tCode == 7 || tokenTable[currentToken].tCode == 8 || tokenTable[currentToken].tCode == 9 || tokenTable[currentToken].tCode == 10 || tokenTable[currentToken].tCode == 11 || tokenTable[currentToken].tCode == 12)){
+        int oppTcode = tokenTable[currentToken].tCode;
         consumeToken("condition");
         //Parses second expression
         expression();
+
+        //Emits the code for the comparison we use the formula tokenCode - 2 to get the m code for the PL/0 opperation
+        emit(2, 0, oppTcode - 2);
     }
     else{
         //Error 9: Invalid comparison opperator
