@@ -82,6 +82,10 @@ Identifier identifierTable[200];
 Symbol symbolTable[100];
 Instruction code[200];
 
+const char* opNames[] = {"", "LIT", "OPR", "LOD", "STO",
+    "CAL", "INC", "JMP", "JPC", "SYS"
+};
+
 //Function defs
 
 //Adds Symbol to symbol table
@@ -125,13 +129,13 @@ void printSymbolTable();
 //Emits PL/0 code
 void emit(int op, int l, int m);
 
+void printCode();
+
 int main(){
     FILE* tokens = fopen("tokens.txt", "r");
     FILE* nametable = fopen("nametable.txt", "r");
 
     if(tokens == NULL || nametable == NULL){
-    printf("Name Table:\n\n");
-    printf("Parse Trace:\n\n");
         error(18);
     }
     
@@ -161,15 +165,11 @@ int main(){
     }
     fclose(nametable);
 
-    //Prints nameTable
-    printNameTable();
-
-    //Prints parse trace title
-    printf("Parse Trace:\n\n");
-    printf("token\tinput\ttext\tnonterminal\n");
-
     //Scanning tokenTable to get symbolTable
     program();
+
+    //Prints Generated Code
+    printCode();
 
     //Prints symbolTable
     printSymbolTable();
@@ -192,18 +192,6 @@ void addSymbol(int type, int nameIdx, int value, int address){
     s.nameIdx = nameIdx;
     symbolTable[symbolCount] = s;
 
-    //Parse tracing for constant
-    if(type == 1){
-        printf("insert entry %d: constant %s, value %d, level 0\n", symbolCount, identifierTable[nameIdx].name, value);
-    }
-    //Parse tracing for variables
-    else if(type == 2){
-        printf("insert entry %d: variable %s, level 0, address %d\n", symbolCount, identifierTable[nameIdx].name, address);
-    }
-    //Parse tracing for procedures
-    else if(type == 3){
-    printf("insert entry %d: procedure %s, level %d, address %d\n",symbolCount, identifierTable[nameIdx].name, level, address);    
-    }
     symbolCount++;
 }
 
@@ -313,7 +301,7 @@ void varDecleration(int* localAddress){
         //Adds var to symbol table
         addSymbol(2, nameIdx, 0, *localAddress);
         //Increments adress
-        *localAddress++;
+        (*localAddress)++;
 
         //Check for more variables
         if(currentToken < tCount && tokenTable[currentToken].tCode == 15){
@@ -384,7 +372,6 @@ void block(){
     int localAddress = 3;
     //Used to start adding symbols from this index to not overwrite symbols from prev scope
     int scopeStart = symbolCount;
-    printf("enter level %d\n", level);
 
     //Holds index that we use to packpatch to after replacing the unfinished jump
     int jumpIdx = cCount;
@@ -415,7 +402,6 @@ void block(){
     for(int i = scopeStart; i < symbolCount; i++){
         if(symbolTable[i].mark == 0){
             symbolTable[i].mark = 1;
-            printf("mark entry %d\n", i);
         }
     }
 
@@ -423,8 +409,6 @@ void block(){
     if(level > 0){
         emit(2, 0, 0);
     }
-
-    printf("leave level %d\n", level);
 }
 
 void program(){
@@ -444,6 +428,9 @@ void program(){
         //Error 1: program ends but tokens still remain after period
         error(1);
     }
+
+    //Emits code for halitng the program once it ends.
+    emit(9, 0, 3);
 }
 
 int findSymbol(int nameIdx){
@@ -518,6 +505,11 @@ void statement(){
         consumeToken("statement");
         condition();
 
+        //Saves jpcIdx for backpatching later
+        int jpcIdx = cCount;
+        emit(8, 0, 0);
+
+        //Check for lack of then
         if(currentToken >= tCount || tokenTable[currentToken].tCode != 24){
             //Error 7: no then statment
             error(7);
@@ -527,11 +519,27 @@ void statement(){
 
         statementList();
 
+
+        //Checks for else
         if(currentToken < tCount && tokenTable[currentToken].tCode == 36){
+            //Saves current position in text seg
+            int jmpIdx = cCount;
+            //Jumps past else
+            emit(7, 0, 0);
+            code[jpcIdx].m = 200 + 3 * cCount;
+
             //Consumes else
             consumeToken("statement");
             statementList();
+
+            //Backpatch orinal JPC to after else statement
+            code[jmpIdx].m = 200 + 3 * cCount;
         }
+        else{
+            //Backpactch original JPC to after conditional statements
+            code[jpcIdx].m = 200 + 3 * cCount;
+        }
+
         
         //Checks for "fi"
         if(currentToken >= tCount || tokenTable[currentToken].tCode != 23){
@@ -544,9 +552,17 @@ void statement(){
 
     //Looks for while/do statements
     else if(currentToken < tCount && tokenTable[currentToken].tCode == 25){
+        //Saves the begging of the loop for future use
+        int loopStart = 200 + 3 * cCount;
+
         //Consumes while
         consumeToken("statement");
         condition();
+
+        //Save JPC code index for backpatching
+        int jpcIdx = cCount;
+        //JPC for the loops condition
+        emit(8, 0, 0);
 
         if(currentToken >= tCount || tokenTable[currentToken].tCode != 24){
             //Error 7: no then statmement
@@ -555,6 +571,13 @@ void statement(){
         //Consume then
         consumeToken("statement");
         statementList();
+
+        //Jumps back to loop start for re-evaluation
+        emit(7, 0, loopStart);
+
+        //Backpatch the JPC to exit loop if false
+        code[jpcIdx].m = 200 + 3 * cCount;
+
         //Checks for elihw finishing of while
         if(currentToken >= tCount || tokenTable[currentToken].tCode != 26){
             //Error 8: no elihw statmement
@@ -639,7 +662,7 @@ void statement(){
             currentToken--;
             error(13);
         }
-
+        //Emits CALL
         emit(5, level - symbolTable[symbolIdx].level, symbolTable[symbolIdx].address);
     }
 
@@ -680,7 +703,6 @@ void factor(){
 
 
         //Traces lookup for symbol
-        traceLookup(symbolIdx);
         if(symbolTable[symbolIdx].type == 1){
             emit(1, 0, symbolTable[symbolIdx].value);
         }
@@ -827,6 +849,7 @@ static const char *messages[] = {
     
     //Prints symbolTable and result line
     if(errCode == 18){
+    printf("\nGenerated Code:\n\n");
     printf("\nSymbol Table:\n\n");
     }
     else{
@@ -900,48 +923,7 @@ const char* getTokenText(int tokenIdx){
 void consumeToken(const char* owner){
     if(currentToken >= tCount)
         return;
-    int code = tokenTable[currentToken].tCode;
-    //If current token is identifier or number which have val field
-    if(code == 1){
-        //For Identifiers
-        printf("%d\t%d %d\t%s\t%s\n", currentToken + 1, code, tokenTable[currentToken].val, getTokenText(currentToken), owner);
-    }
-
-    else if(code == 2){
-        //For Numbers
-        printf("%d\t%d %s\t%s\t%s\n", currentToken + 1, code, getTokenText(currentToken), getTokenText(currentToken), owner);
-    }
-
-    else{
-        //Other tokens don't trace val
-        printf("%d\t%d\t%s\t%s\n", currentToken + 1, code, getTokenText(currentToken), owner);
-    }
     currentToken++;
-}
-
-void traceLookup(int symbolIdx){
-    Symbol s = symbolTable[symbolIdx];
-    const char* typeName;
-    if(s.type == 1)
-        typeName = "constant";
-    else
-        typeName = "variable";
-
-    printf("lookup %s: entry %d, %s, level %d\n", identifierTable[s.nameIdx].name, symbolIdx, typeName, s.level);
-}
-
-void printNameTable(){
-    printf("Name Table: \n\n");
-    if(iCount > 0){
-        printf("index\tname\tline\tcolumn\n");
-
-        for(int i = 0; i<iCount; i++){
-            Identifier id = identifierTable[i];
-            printf("%d\t%s\t%d\t%d\n", id.index, id.name, id.line, id.col);
-        }
-    }     
-    
-    printf("\n");
 }
 
 void printSymbolTable(){
@@ -967,10 +949,18 @@ void printSymbolTable(){
 void emit(int op, int l, int m){
     //Handles overflow
     if(cCount >= 200){
-        return;
+        exit(1);
     }
 
     code[cCount].op = op;
     code[cCount].l = l;
     code[cCount].m = m;
+    cCount++;
+}
+
+void printCode(){
+    printf("Generated Code:\n\n");
+    for(int i = 0; i<cCount; i++){
+        printf("%s\t%d\t%d\n", opNames[code[i].op], code[i].l, code[i].m);
+    }
 }
