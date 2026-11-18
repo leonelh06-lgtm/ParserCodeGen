@@ -86,6 +86,10 @@ const char* opNames[] = {"", "LIT", "OPR", "LOD", "STO",
     "CAL", "INC", "JMP", "JPC", "SYS"
 };
 
+const char* OPRnames[] = {"RTN", "ADD", "SUB", "MUL", "DIV",
+    "EQL", "NEQ", "LSS", "LEQ", "GTR", "GEQ"
+};
+
 //Function defs
 
 //Adds Symbol to symbol table
@@ -125,11 +129,13 @@ void traceLookup(int symbolIdx);
 //Prints nameTable
 void printNameTable();
 //Prints symbolTable
-void printSymbolTable();
+void printSymbolTable(int errFlag);
 //Emits PL/0 code
 void emit(int op, int l, int m);
-
-void printCode();
+//Prints output
+void printCode(int errFlag);
+//Write elf.txt
+void writeCode();
 
 int main(){
     FILE* tokens = fopen("tokens.txt", "r");
@@ -169,10 +175,12 @@ int main(){
     program();
 
     //Prints Generated Code
-    printCode();
+    printCode(0);
+    //Write elf
+    writeCode();
 
     //Prints symbolTable
-    printSymbolTable();
+    printSymbolTable(0);
 
     printf("Result:\n\n");
     printf("program accepted\n");
@@ -183,6 +191,10 @@ int main(){
 /*Adds symbols to symbol table (needs a function unlike identifier and tokens
 since it requires context of tokens to decide symbol paramters)*/
 void addSymbol(int type, int nameIdx, int value, int address){
+    if(symbolCount >= 100){
+        error(17);
+    }
+
     Symbol s;
     s.type = type;
     s.value = value;
@@ -680,6 +692,7 @@ void statementList(){
 }
 
 void factor(){
+    
     if(currentToken >= tCount){
         //Error 11: Expected Factor
         error(11);
@@ -712,7 +725,7 @@ void factor(){
         else{
             //Procedures cannot be called as factors
             currentToken--;
-            error(11);
+            error(19);
         }
         
     }
@@ -759,13 +772,17 @@ void expression(){
         //Consumes sign symbol
         consumeToken("expression");
     }
+
+    if(negFlag)
+        //Setups negation by pushing 0 onto stack
+        emit(1, 0, 0);
+
     //Parses first term
     term();
-    //Negates term if negative
-    if(negFlag == 1){
-        emit(1, 0, -1);
-        emit(2, 0, 3);
-    }
+    //Subtracts term from 0 to get negation to top of stack
+    if(negFlag)
+        emit(2,0,2);
+    
     //Checks for "+" or "-"
     while(currentToken < tCount  && (tokenTable[currentToken].tCode == 3 || tokenTable[currentToken].tCode == 4)){
         int m;
@@ -828,7 +845,7 @@ void error(int errCode){
 static const char *messages[] = {
         "",
         "the program must end with a period, and nothing may follow it",
-        "const, var, and read must be followed by an identifier",
+        "const, var, procedure, call, and read must be followed by an identifier",
         "a constant must be declared as name := number",
         "declarations must be separated by , and end with ;",
         "an identifier that starts a statement must be followed by =",
@@ -838,23 +855,20 @@ static const char *messages[] = {
         "a condition must contain one of == != < <= > >=",
         "a left parenthesis must be closed with a right parenthesis",
         "a factor must be an identifier, a number, or (",
-        "procedure declarations are not part of this grammar",
-        "call statements are not part of this grammar",
+        "a procedure name and a procedure block must each be followed by ;",
+        "call must name a procedure",
         "identifier already declared in this block",
         "undeclared identifier",
         "only a variable may be assigned or read",
         "symbol table is full",
-        "cannot open tokens.txt or nametable.txt"
+        "cannot open tokens.txt or nametable.txt",
+        "a procedure name cannot be used in an expression",
+        "generated code exceeds 200 instructions"
     };
     
-    //Prints symbolTable and result line
-    if(errCode == 18){
-    printf("\nGenerated Code:\n\n");
-    printf("\nSymbol Table:\n\n");
-    }
-    else{
-        printSymbolTable();
-    }
+    //Prints Code and symbolTable
+    printCode(1);
+    printSymbolTable(1);
 
     printf("Result:\n\n");
 
@@ -862,6 +876,9 @@ static const char *messages[] = {
     //Handles file opening issues
     if(errCode == 18){
         printf("Error 18: %s\n", messages[18]);
+    }
+    else if(errCode == 20){
+        printf("Error 20: %s\n", messages[20]);
     }
     //Handles out of bounds tokens
     else if(currentToken >= tCount){
@@ -926,9 +943,9 @@ void consumeToken(const char* owner){
     currentToken++;
 }
 
-void printSymbolTable(){
+void printSymbolTable(int errFlag){
     printf("\nSymbol Table: \n\n");
-    if(symbolCount > 0){
+    if(!errFlag && symbolCount > 0){
         printf("entry\tkind\tname\tvalue\tlevel\taddress\tmark\n");
         for(int i = 0; i<symbolCount; i++){
             Symbol s = symbolTable[i];
@@ -936,9 +953,12 @@ void printSymbolTable(){
                 //Constants
                 printf("%d\tconstant\t%s\t%d\t%d\t-\t%d\n", i, identifierTable[s.nameIdx].name, s.value, s.level, s.mark);
             }
-            else{
+            else if (s.type ==2){
                 //Variables
                 printf("%d\tvariable\t%s\t-\t%d\t%d\t%d\n", i, identifierTable[s.nameIdx].name, s.level, s.address, s.mark);
+            }
+            else{
+                printf("%d\tprocedure\t%s\t-\t%d\t%d\t%d\n", i, identifierTable[s.nameIdx].name, s.level, s.address, s.mark);
             }
         }
     }
@@ -949,7 +969,7 @@ void printSymbolTable(){
 void emit(int op, int l, int m){
     //Handles overflow
     if(cCount >= 200){
-        exit(1);
+        error(20);
     }
 
     code[cCount].op = op;
@@ -958,9 +978,33 @@ void emit(int op, int l, int m){
     cCount++;
 }
 
-void printCode(){
+void printCode(int errFlag){
+    //Prints headers
     printf("Generated Code:\n\n");
-    for(int i = 0; i<cCount; i++){
-        printf("%s\t%d\t%d\n", opNames[code[i].op], code[i].l, code[i].m);
+    if(!errFlag){
+        printf("index\taddress\top\tL\tM\n");
+        char* opName;
+
+        for(int i = 0; i<cCount; i++){
+            if(code[i].op == 2){
+                opName = OPRnames[code[i].m];
+            }
+            else
+                opName = opNames[code[i].op];
+            
+            printf("%d\t%d\t%s\t%d\t%d\n", i, 200 + 3 * i, opName, code[i].l, code[i].m);
+        }
+    }   
+    printf("\n");
+}
+
+void writeCode(){
+    FILE* elf = fopen("elf.txt", "w");
+    if(elf == NULL){
+        exit(1);
     }
+    for(int i = 0; i<cCount; i++){
+        fprintf(elf, "%d\t%d\t%d\n", code[i].op, code[i].l, code[i].m);
+    }
+    fclose(elf);
 }
